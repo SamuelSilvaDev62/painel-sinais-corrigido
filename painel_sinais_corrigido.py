@@ -32,25 +32,40 @@ if st.sidebar.button("Executar Análise e Backtesting"):
     # Baixa os dados do yfinance
     data = yf.download(tickers=symbol, period=period, interval=interval)
     
-    if data.empty or 'Close' not in data.columns:
-        st.error("Nenhum dado encontrado ou a coluna 'Close' está faltando. Verifique o símbolo e o período.")
+    if data.empty:
+        st.error("Nenhum dado encontrado. Verifique o símbolo e o período.")
     else:
-        # --- CORREÇÃO CRÍTICA: Garantir que 'close_prices' é uma pd.Series 1D ---
-        # Extrai a coluna 'Close' como uma Série e remove quaisquer valores nulos nela.
+        # --- CORREÇÃO DEFINITIVA: Normalizar as colunas do DataFrame ---
+        # Remove o MultiIndex de colunas, se houver, e renomeia para o padrão.
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.droplevel(1) # Remove o nível do ticker
+        
+        # Garante que os nomes das colunas estão em maiúsculas (Open, High, Low, Close)
+        data.columns = [col.capitalize() for col in data.columns]
+
+        if 'Close' not in data.columns:
+            st.error("A coluna 'Close' não foi encontrada após o download. Não é possível continuar.")
+            st.stop()
+        
+        # Agora, 'close_prices' tem a garantia de ser uma Série 1D
         close_prices = data['Close'].dropna()
 
         if close_prices.empty:
             st.error("Não há dados de preço de fechamento válidos para processar.")
         else:
             # --- 1. Cálculo dos Indicadores ---
-            data['EMA'] = EMAIndicator(close=close_prices, window=ema_window).ema_indicator()
-            macd = MACD(close=close_prices, window_slow=macd_slow, window_fast=macd_fast, window_sign=macd_sign)
-            data['MACD'] = macd.macd()
-            data['Signal'] = macd.macd_signal()
-            data['RSI'] = RSIIndicator(close=close_prices, window=rsi_window).rsi()
-            
-            # Remove linhas com NaN gerados pelos indicadores para alinhar todos os dados
-            data.dropna(inplace=True)
+            # Envolvemos os cálculos em um bloco try/except para capturar outros erros inesperados
+            try:
+                data['EMA'] = EMAIndicator(close=close_prices, window=ema_window).ema_indicator()
+                macd = MACD(close=close_prices, window_slow=macd_slow, window_fast=macd_fast, window_sign=macd_sign)
+                data['MACD'] = macd.macd()
+                data['Signal'] = macd.macd_signal()
+                data['RSI'] = RSIIndicator(close=close_prices, window=rsi_window).rsi()
+                
+                data.dropna(inplace=True)
+            except Exception as e:
+                st.error(f"Ocorreu um erro durante o cálculo dos indicadores: {e}")
+                st.stop()
 
             if data.empty:
                 st.warning("Não há dados suficientes para realizar o backtesting após o cálculo dos indicadores.")
@@ -61,6 +76,7 @@ if st.sidebar.button("Executar Análise e Backtesting"):
             data['Sinal_Venda'] = (data['MACD'] < data['Signal']) & (data['MACD'].shift(1) >= data['Signal'].shift(1)) & (data['RSI'] > rsi_oversold)
 
             # --- 3. Execução do Backtesting ---
+            # (O restante do código de backtesting e plotagem continua aqui, sem alterações)
             st.header("Resultados do Backtesting")
             
             capital = initial_capital
@@ -84,7 +100,6 @@ if st.sidebar.button("Executar Análise e Backtesting"):
                 capital = position * final_price
                 trades.append({'type': 'sell', 'price': final_price, 'date': data.index[-1], 'capital': capital})
 
-            # --- 4. Cálculo das Métricas de Desempenho ---
             final_capital = capital
             total_return = ((final_capital - initial_capital) / initial_capital) * 100
             buy_and_hold_return = ((data['Close'].iloc[-1] - data['Close'].iloc[0]) / data['Close'].iloc[0]) * 100
@@ -99,14 +114,13 @@ if st.sidebar.button("Executar Análise e Backtesting"):
                 sell_trades_capital = [t['capital'] for t in trades if t['type'] == 'sell']
                 
                 for i in range(num_trades):
-                    if sell_trades_capital[i] > buy_trades_capital[i]:
-                        winning_trades += 1
-                    else:
-                        losing_trades += 1
+                    if i < len(sell_trades_capital) and i < len(buy_trades_capital):
+                        if sell_trades_capital[i] > buy_trades_capital[i]:
+                            winning_trades += 1
+                        else:
+                            losing_trades += 1
                 win_rate = (winning_trades / num_trades) * 100
 
-            # --- 5. Exibição dos Resultados ---
-            # (O restante do código para exibir os resultados permanece o mesmo)
             col1, col2, col3 = st.columns(3)
             col1.metric("Retorno da Estratégia", f"{total_return:.2f}%")
             col2.metric("Retorno Buy & Hold", f"{buy_and_hold_return:.2f}%")
@@ -117,10 +131,9 @@ if st.sidebar.button("Executar Análise e Backtesting"):
             col2.metric("Taxa de Acerto", f"{win_rate:.2f}%")
             col3.metric("Trades Vencedores/Perdedores", f"{winning_trades}/{losing_trades}")
 
-            # Gráfico de Evolução do Capital
             st.subheader("Evolução do Capital vs. Buy and Hold")
             if not trades:
-                st.warning("Nenhum trade foi executado para gerar o gráfico de evolução do capital.")
+                st.warning("Nenhum trade foi executado.")
             else:
                 trade_log = pd.DataFrame(trades)
                 capital_evolution = pd.concat([
