@@ -1,19 +1,18 @@
-
-    import streamlit as st
+import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 from ta.trend import EMAIndicator, MACD
-from ta.momentum import RSIIndicator # Importa o indicador RSI
+from ta.momentum import RSIIndicator
 
 st.set_page_config(layout="wide")
-st.title("Painel de Sinais - Estratégia MACD + EMA + RSI")
+st.title("Painel de Sinais com Backtesting da Estratégia")
 
 # --- Inputs da Sidebar ---
-st.sidebar.header("Configurações")
-symbol = st.sidebar.text_input("Símbolo (ex: EURUSD=X)", value="EURUSD=X")
-interval = st.sidebar.selectbox("Intervalo", ["1m", "5m", "15m", "30m", "1h", "1d"], index=1)
-period = st.sidebar.selectbox("Período", ["1d", "5d", "1mo", "3mo", "6mo", "1y"], index=0)
+st.sidebar.header("Configurações do Ativo")
+symbol = st.sidebar.text_input("Símbolo (ex: BTC-USD)", value="BTC-USD")
+interval = st.sidebar.selectbox("Intervalo", ["1h", "1d", "1wk"], index=1)
+period = st.sidebar.selectbox("Período", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
 
 # --- Parâmetros dos Indicadores ---
 st.sidebar.header("Parâmetros dos Indicadores")
@@ -25,83 +24,111 @@ rsi_window = st.sidebar.number_input("RSI - Janela", value=14)
 rsi_overbought = st.sidebar.number_input("RSI - Nível de Sobrecompra", value=70)
 rsi_oversold = st.sidebar.number_input("RSI - Nível de Sobrevenda", value=30)
 
+# --- Parâmetros do Backtesting ---
+st.sidebar.header("Parâmetros do Backtesting")
+initial_capital = st.sidebar.number_input("Capital Inicial ($)", value=10000.0)
 
-if st.sidebar.button("Analisar Ativo"):
+if st.sidebar.button("Executar Análise e Backtesting"):
     # Baixa os dados do yfinance
     data = yf.download(tickers=symbol, period=period, interval=interval)
     
     if data.empty:
         st.error("Nenhum dado encontrado. Verifique o símbolo e tente novamente.")
     else:
-        # Garante que a coluna 'Close' seja do tipo float
+        # --- 1. Cálculo dos Indicadores ---
         close_prices = data['Close'].astype(float)
-
-        # --- Cálculos dos Indicadores ---
-        
-        # EMA
         data['EMA'] = EMAIndicator(close=close_prices, window=ema_window).ema_indicator()
-
-        # MACD
-        macd_indicator = MACD(close=close_prices, window_slow=macd_slow, window_fast=macd_fast, window_sign=macd_sign)
-        data['MACD'] = macd_indicator.macd()
-        data['Signal'] = macd_indicator.macd_signal()
-        data['MACD_Hist'] = macd_indicator.macd_diff()
-
-        # RSI (NOVO)
+        macd = MACD(close=close_prices, window_slow=macd_slow, window_fast=macd_fast, window_sign=macd_sign)
+        data['MACD'] = macd.macd()
+        data['Signal'] = macd.macd_signal()
         data['RSI'] = RSIIndicator(close=close_prices, window=rsi_window).rsi()
-
-        # Remove linhas com NaN geradas pelos indicadores
         data.dropna(inplace=True)
 
-        # --- Plot dos Gráficos ---
-        st.header(f"Análise Técnica de {symbol}")
+        # --- 2. Geração de Sinais ---
+        data['Sinal_Compra'] = (data['MACD'] > data['Signal']) & (data['MACD'].shift(1) <= data['Signal'].shift(1)) & (data['RSI'] < rsi_overbought)
+        data['Sinal_Venda'] = (data['MACD'] < data['Signal']) & (data['MACD'].shift(1) >= data['Signal'].shift(1)) & (data['RSI'] > rsi_oversold)
 
-        # Gráfico de Preço + EMA
-        fig_price, ax_price = plt.subplots(figsize=(12, 6))
-        ax_price.plot(data.index, data['Close'], label='Preço de Fechamento')
-        ax_price.plot(data.index, data['EMA'], label=f'EMA {ema_window}', linestyle='--')
-        ax_price.set_title(f'{symbol} - Preço e Média Móvel Exponencial')
-        ax_price.legend()
-        st.pyplot(fig_price)
-
-        # Gráfico do MACD
-        fig_macd, ax_macd = plt.subplots(figsize=(12, 4))
-        ax_macd.plot(data.index, data['MACD'], label='Linha MACD')
-        ax_macd.plot(data.index, data['Signal'], label='Linha de Sinal', linestyle='--')
-        colors = ['g' if val >= 0 else 'r' for val in data['MACD_Hist']]
-        ax_macd.bar(data.index, data['MACD_Hist'], label='Histograma', color=colors, width=0.001)
-        ax_macd.axhline(0, color='gray', linewidth=1, linestyle='--')
-        ax_macd.set_title("Indicador MACD")
-        ax_macd.legend()
-        st.pyplot(fig_macd)
-
-        # Gráfico do RSI (NOVO)
-        st.subheader("Indicador RSI (Índice de Força Relativa)")
-        fig_rsi, ax_rsi = plt.subplots(figsize=(12, 4))
-        ax_rsi.plot(data.index, data['RSI'], label=f'RSI {rsi_window}')
-        ax_rsi.axhline(rsi_overbought, color='red', linestyle='--', label=f'Sobrecompra ({rsi_overbought})')
-        ax_rsi.axhline(rsi_oversold, color='green', linestyle='--', label=f'Sobrevenda ({rsi_oversold})')
-        ax_rsi.set_title("RSI")
-        ax_rsi.legend()
-        st.pyplot(fig_rsi)
-
-        # --- Geração e Exibição de Sinais com Confirmação do RSI ---
-        st.header("Sinais de Compra/Venda (MACD + Confirmação RSI)")
+        # --- 3. Execução do Backtesting ---
+        st.header("Resultados do Backtesting")
         
-        # Sinal de Compra: Cruzamento do MACD + RSI não sobrecomprado
-        data['Sinal_Compra'] = (data['MACD'] > data['Signal']) & \
-                               (data['MACD'].shift(1) <= data['Signal'].shift(1)) & \
-                               (data['RSI'] < rsi_overbought)
+        capital = initial_capital
+        position = 0  # Quantidade de ativo em posse
+        trades = []
         
-        # Sinal de Venda: Cruzamento do MACD + RSI não sobrevendido
-        data['Sinal_Venda'] = (data['MACD'] < data['Signal']) & \
-                              (data['MACD'].shift(1) >= data['Signal'].shift(1)) & \
-                              (data['RSI'] > rsi_oversold)
+        for i in range(len(data)):
+            # Se temos um sinal de COMPRA e NÃO temos posição aberta
+            if data['Sinal_Compra'].iloc[i] and position == 0:
+                buy_price = data['Close'].iloc[i]
+                position = capital / buy_price
+                trades.append({'type': 'buy', 'price': buy_price, 'date': data.index[i], 'capital': capital})
+            
+            # Se temos um sinal de VENDA e TEMOS uma posição aberta
+            elif data['Sinal_Venda'].iloc[i] and position > 0:
+                sell_price = data['Close'].iloc[i]
+                capital = position * sell_price
+                position = 0
+                trades.append({'type': 'sell', 'price': sell_price, 'date': data.index[i], 'capital': capital})
 
-        # Filtra e exibe os últimos 10 sinais
-        sinais = data[(data['Sinal_Compra']) | (data['Sinal_Venda'])].copy()
-        if not sinais.empty:
-            sinais['Tipo de Sinal'] = sinais.apply(lambda row: 'Compra' if row['Sinal_Compra'] else 'Venda', axis=1)
-            st.dataframe(sinais[['Close', 'Tipo de Sinal', 'MACD', 'Signal', 'RSI']].tail(10))
+        # Se a última operação foi uma compra, "vende" no último dia para fechar a posição
+        if position > 0:
+            final_price = data['Close'].iloc[-1]
+            capital = position * final_price
+            position = 0
+            trades.append({'type': 'sell', 'price': final_price, 'date': data.index[-1], 'capital': capital})
+
+        # --- 4. Cálculo das Métricas de Desempenho ---
+        final_capital = capital
+        total_return = ((final_capital - initial_capital) / initial_capital) * 100
+        buy_and_hold_return = ((data['Close'].iloc[-1] - data['Close'].iloc[0]) / data['Close'].iloc[0]) * 100
+        
+        num_trades = len([t for t in trades if t['type'] == 'buy'])
+        winning_trades = 0
+        losing_trades = 0
+        
+        if num_trades > 0:
+            buy_trades = [t['capital'] for t in trades if t['type'] == 'buy']
+            sell_trades = [t['capital'] for t in trades if t['type'] == 'sell']
+            
+            for i in range(num_trades):
+                if sell_trades[i] > buy_trades[i]:
+                    winning_trades += 1
+                else:
+                    losing_trades += 1
+            win_rate = (winning_trades / num_trades) * 100 if num_trades > 0 else 0
         else:
-            st.warning("Nenhum sinal encontrado para os critérios definidos no período selecionado.")
+            win_rate = 0
+
+        # --- 5. Exibição dos Resultados ---
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Retorno da Estratégia", f"{total_return:.2f}%")
+        col2.metric("Retorno Buy & Hold", f"{buy_and_hold_return:.2f}%")
+        col3.metric("Número de Trades", num_trades)
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Capital Final", f"${final_capital:,.2f}")
+        col2.metric("Taxa de Acerto", f"{win_rate:.2f}%")
+        col3.metric("Trades Vencedores/Perdedores", f"{winning_trades}/{losing_trades}")
+
+        # Gráfico de Evolução do Capital
+        st.subheader("Evolução do Capital vs. Buy and Hold")
+        if not trades:
+            st.warning("Nenhum trade foi executado para gerar o gráfico de evolução do capital.")
+        else:
+            trade_log = pd.DataFrame(trades)
+            capital_evolution = pd.concat([
+                pd.DataFrame({'date': [data.index[0]], 'capital': [initial_capital]}),
+                trade_log[trade_log['type'] == 'sell'][['date', 'capital']]
+            ]).set_index('date')
+            
+            buy_and_hold_evolution = (data['Close'] / data['Close'].iloc[0]) * initial_capital
+
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(capital_evolution.index, capital_evolution['capital'], label='Estratégia MACD+RSI', marker='o', linestyle='-')
+            ax.plot(buy_and_hold_evolution.index, buy_and_hold_evolution, label='Estratégia Buy & Hold', linestyle='--')
+            ax.set_title("Crescimento do Capital")
+            ax.legend()
+            st.pyplot(fig)
+
+        # Exibe os gráficos dos indicadores
+        st.header("Gráficos dos Indicadores")
+        # (O código para plotar os indicadores pode ser adicionado aqui se desejado)
