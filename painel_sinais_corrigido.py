@@ -1,9 +1,8 @@
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
-import ta
+from ta.trend import EMAIndicator, MACD
 
 st.set_page_config(layout="wide")
 st.title("Painel de Sinais - Estratégia MACD + EMA")
@@ -19,12 +18,17 @@ if st.sidebar.button("Buscar dados"):
         st.error("Nenhum dado encontrado. Verifique o símbolo e tente novamente.")
     else:
         data.dropna(inplace=True)
-        data['EMA9'] = ta.trend.ema_indicator(data['Close'], window=9)
-        macd = ta.trend.MACD(data['Close'])
-        data['MACD'] = macd.macd()
-        data['Signal'] = macd.macd_signal()
 
-        # Plotando o gráfico de velas com EMA
+        # EMA 9 corretamente como Series
+        ema_indicator = EMAIndicator(close=data['Close'], window=9)
+        data['EMA9'] = ema_indicator.ema_indicator()
+
+        # MACD corretamente
+        macd_indicator = MACD(close=data['Close'])
+        data['MACD'] = macd_indicator.macd()
+        data['Signal'] = macd_indicator.macd_signal()
+
+        # Plot Preço + EMA
         st.subheader(f"Gráfico de {symbol} com EMA9")
         fig, ax = plt.subplots(figsize=(12, 6))
         ax.plot(data.index, data['Close'], label='Preço')
@@ -33,7 +37,7 @@ if st.sidebar.button("Buscar dados"):
         ax.legend()
         st.pyplot(fig)
 
-        # MACD
+        # Plot MACD
         st.subheader("Indicador MACD")
         fig, ax = plt.subplots(figsize=(12, 4))
         ax.plot(data.index, data['MACD'], label='MACD')
@@ -43,10 +47,10 @@ if st.sidebar.button("Buscar dados"):
         ax.legend()
         st.pyplot(fig)
 
-        # Sinais baseados no cruzamento
+        # Sinais de entrada e saída
         st.subheader("Sinais")
         data['Sinal_Entrada'] = (data['MACD'] > data['Signal']) & (data['MACD'].shift(1) <= data['Signal'].shift(1))
         data['Sinal_Saida'] = (data['MACD'] < data['Signal']) & (data['MACD'].shift(1) >= data['Signal'].shift(1))
-        
+
         sinais = data[data['Sinal_Entrada'] | data['Sinal_Saida']][['Close', 'MACD', 'Signal', 'Sinal_Entrada', 'Sinal_Saida']]
         st.dataframe(sinais.tail(10))
