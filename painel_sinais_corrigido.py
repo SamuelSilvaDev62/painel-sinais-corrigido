@@ -20,7 +20,7 @@ if st.sidebar.button("Buscar dados"):
         data.dropna(inplace=True)
 
         # EMA 9 corretamente como Series
-        ema_indicator = EMAIndicator(close=data['Close'], window=9)
+        ema_indicator = EMAIndicator(close=data['Close'].squeeze(), window=9)
         data['EMA9'] = ema_indicator.ema_indicator()
 
         # MACD corretamente
